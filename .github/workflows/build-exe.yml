@@ -1,0 +1,67 @@
+# Автосборка Windows-EXE на серверах GitHub.
+# Запуск: вкладка Actions -> Build Windows EXE -> Run workflow,
+# либо автоматически при каждом push в main.
+# Готовый файл: Actions -> выполненный запуск -> Artifacts -> PDF_OCR
+
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Tesseract (UB Mannheim build via Chocolatey)
+        run: choco install tesseract --no-progress -y
+
+      - name: Copy Tesseract into vendor folder
+        shell: cmd
+        run: |
+          xcopy /E /I /Y "C:\Program Files\Tesseract-OCR" vendor\tesseract
+          if not exist "vendor\tesseract\tesseract.exe" exit /b 1
+
+      - name: Add Russian language data
+        shell: pwsh
+        run: |
+          $url = "https://github.com/tesseract-ocr/tessdata_fast/raw/main/rus.traineddata"
+          Invoke-WebRequest -Uri $url -OutFile "vendor\tesseract\tessdata\rus.traineddata"
+          if (-not (Test-Path "vendor\tesseract\tessdata\eng.traineddata")) {
+            Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata" -OutFile "vendor\tesseract\tessdata\eng.traineddata"
+          }
+
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Build one-file EXE
+        shell: cmd
+        run: >
+          pyinstaller --noconfirm --clean --onefile --windowed --name PDF_OCR
+          --add-binary "vendor\tesseract\tesseract.exe;tesseract"
+          --add-binary "vendor\tesseract\*.dll;tesseract"
+          --add-data "vendor\tesseract\tessdata;tesseract\tessdata"
+          main.py
+
+      - name: Smoke check
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist\PDF_OCR.exe")) { exit 1 }
+          "EXE size: {0:N1} MB" -f ((Get-Item "dist\PDF_OCR.exe").Length / 1MB)
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: PDF_OCR
+          path: dist/PDF_OCR.exe
