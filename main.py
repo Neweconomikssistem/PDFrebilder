@@ -73,6 +73,12 @@ def add_invisible_text(page, data, scale_x, scale_y, font):
     inserted = 0
     derot = page.derotation_matrix   # OCR видит страницу в «видимых» координатах,
     rot = page.rotation % 360        # а insert_textbox работает в неповёрнутых
+    # полная высота глифов (верхние + нижние выносные) в долях кегля:
+    # нужна, чтобы невидимый бокс слова совпал с его видимой высотой —
+    # иначе боксы соседних строк перекрываются и выделение "липнет" к чужим строкам
+    span = font.ascender - font.descender
+    if span <= 0:
+        span = 1.2
 
     n = len(data["text"])
     for i in range(n):
@@ -91,18 +97,24 @@ def add_invisible_text(page, data, scale_x, scale_y, font):
         unit_len = font.text_length(text, fontsize=1)
         if unit_len <= 0:
             continue
-        fontsize = min(w / unit_len, h * 1.2)
+        # кегль: вписываем слово по ширине, а по высоте — так, чтобы
+        # весь глифовый бокс (кегль * span) не превышал высоту OCR-слова
+        fontsize = min(w / unit_len, h / span)
         fontsize = max(fontsize, 1.0)
 
-        # Прямоугольник берём с запасом, чтобы одна строка гарантированно
-        # помещалась и слово не было отброшено (insert_textbox при нехватке
-        # места молча не вставляет текст и возвращает отрицательное число)
+        # Прямоугольник минимальный: ровно под одну строку. Если insert_textbox
+        # всё же не помещает текст (rv < 0 — тогда он молча ничего не вставляет),
+        # пробуем чуть меньший кегль, в конце — заведомо просторный вариант.
         try:
-            for attempt_fs in (fontsize, fontsize * 0.85):
+            for attempt_fs, extra_h in (
+                (fontsize, 0.8),
+                (fontsize * 0.9, 1.5),
+                (fontsize * 0.85, h * 0.6 + 3),
+            ):
                 rect = fitz.Rect(
                     x, y,
-                    x + w * 1.02 + 1,
-                    y + max(h, attempt_fs * 1.4) + 2,
+                    x + w + 0.6,
+                    y + attempt_fs * span + extra_h,
                 )
                 rect = rect * derot   # перевод в неповёрнутые координаты страницы
                 rect.normalize()
